@@ -9,7 +9,15 @@ ROOT_SERVER = "199.7.83.42"  # ICANN Root Server
 DNS_PORT = 53
 
 
-def get_dns_record(udp_socket, domain: str, parent_server: str, record_type):
+def get_dns_record(udp_socket, domain: str, parent_server: str, record_type) -> dict:
+    """
+    returns a dict that always has the fields: answers, cname, ns, additional, error
+    answers will hold A results
+    cname will hold a cname if there is one
+    ns will hold NS results
+    additional will hold A results for those ns results
+    error will hold an error message if there is one
+    """
     q = DNSRecord.question(domain, qtype=record_type)
     q.header.rd = 0  # Recursion Desired?  NO
     # print("DNS query", repr(q))
@@ -83,6 +91,9 @@ def get_dns_record(udp_socket, domain: str, parent_server: str, record_type):
 
 
 def create_labels(dm):
+    """
+    returns a list of 3 labels corresponding to the tld, auth, and final domain name, or it passes an IndexError
+    """
     if dm[-1] == '.':
         dm = dm[0:-1]
     labels = []
@@ -97,8 +108,16 @@ def create_labels(dm):
 
 
 def resolve(s, domain, servers, rtype="NS") -> dict:
+    """
+    will find the ipv4 address of a given domain if possible
+    returns a dict with an answers, cname, and error section
+    answers will have A results
+    cname will have possible cname result
+    error will have possible error message
+    """
     nonexistent = False
 
+    # tries every server for a domain name that is provided in the parameter
     for server in servers:
         try:
             r = get_dns_record(s, domain, server, rtype)
@@ -109,6 +128,7 @@ def resolve(s, domain, servers, rtype="NS") -> dict:
                 nonexistent = True
             continue
 
+        # returns the answers immediately if there are any
         if r["answers"]:
             return {
                 "answers": r["answers"],
@@ -116,6 +136,7 @@ def resolve(s, domain, servers, rtype="NS") -> dict:
                 "error": None
             }
 
+        # returns the cname immediately if there is one
         if r["cname"]:
             print(f"cname of {domain} is {r['cname']}")
             return {
@@ -124,31 +145,35 @@ def resolve(s, domain, servers, rtype="NS") -> dict:
                 "error": None
             }
 
+        # looks at the ns list if there is one
         if r["ns"]:
+            # list to hold ips found in the additional section
             ns_ips = []
             if r["additional"]:
                 ns_ips.extend(r["additional"])
 
+            # if there are only hostnames and no additional IPs it recursively calls itself on those hostnames
             if not ns_ips:
                 for ns_host in r["ns"]:
                     ns_resp = resolve(s, ns_host, resolve_tld(s, ns_host))
                     if ns_resp["answers"]:
                         ns_ips.extend(ns_resp["answers"])
-
+            # returns the IPs found in the additional section or during the hostname recursion
             if ns_ips:
                 return {
                     "answers": ns_ips,
                     "cname": None,
                     "error": None
                 }
-        print("Nonexistent domain")
         continue
+    # if there is a nonexistent error for one of the servers queried, it will return a dict with that error
     if nonexistent:
         return {
             "answers": [],
             "cname": None,
             "error": "Nonexistent domain"
         }
+    # if everything fails it returns a dict with a that error
     else:
         return {
             "answers": [],
@@ -158,6 +183,11 @@ def resolve(s, domain, servers, rtype="NS") -> dict:
 
 
 def resolve_tld(s, d):
+    """
+    gets the IPs of TLD servers, given a domain name
+    s is a socket
+    d is a domain_name
+    """
     n = get_dns_record(s, d, ROOT_SERVER, "NS")
     return n["additional"]
 
@@ -200,6 +230,7 @@ if __name__ == '__main__':
                 cache.pop(names[int(remove_args[1]) - 1])
                 continue
 
+            # if there is a nonexistent domain due to incorrect formatting it catches here
             try:
                 d_labels = create_labels(domain_name)
             except IndexError:
@@ -212,7 +243,7 @@ if __name__ == '__main__':
                 auth_servers = None
                 tld_servers = None
 
-                # check cache
+                # check the cache
                 if cache.get(d_labels[2], None):
                     print(f"IP address resolution of \"{d_labels[2][0:-1]}\" found in cache")
                     ips = cache[d_labels[2]]
